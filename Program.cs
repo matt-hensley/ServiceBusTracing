@@ -32,20 +32,20 @@ using var tracing = Sdk.CreateTracerProviderBuilder()
     .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(serviceName))
     .Build();
 
-// force AMQP transport
-// ensures HttpClient instrumentation is not used
-var options = new ServiceBusClientOptions
+var client = new ServiceBusClient(connectionString, new ServiceBusClientOptions
 {
     TransportType = ServiceBusTransportType.AmqpTcp,
-};
-await using var client = new ServiceBusClient(connectionString, options);
+});
 Console.WriteLine($"Client created. Transport: {client.TransportType}, Namespace: {client.FullyQualifiedNamespace}");
 
 var sender = client.CreateSender(topicName);
-var receiver = client.CreateReceiver(topicName, subscriptionName);
+var processor = client.CreateProcessor(topicName, subscriptionName, new ServiceBusProcessorOptions
+{
+    AutoCompleteMessages = false,
+    MaxConcurrentCalls = 1,
+});
 
 var cancel = new CancellationTokenSource();
-var tasks = new List<Task>();
 
 var sending = Task.Run(async () =>
 {
@@ -62,40 +62,33 @@ var sending = Task.Run(async () =>
         await Task.Delay(5000, cancel.Token);
     }
 }, cancel.Token);
-tasks.Add(sending);
 
-var receiving = Task.Run(async () =>
+async Task MessageHandler(ProcessMessageEventArgs args)
 {
-    if (!enableReceiver) return;
+    Console.WriteLine("Received: " + args.Message.Body.ToString());
+    await args.CompleteMessageAsync(args.Message);
+}
 
-    while (true)
-    {
-        var messages = await receiver.ReceiveMessagesAsync(10, maxWaitTime: TimeSpan.FromSeconds(5), cancellationToken: cancel.Token);
-
-        foreach (var message in messages)
-        {
-            Console.WriteLine("Received: " + message.Body.ToString());
-            await receiver.CompleteMessageAsync(message, cancel.Token);
-        }
-
-        await Task.Delay(1000, cancel.Token);
-    }
-}, cancel.Token);
-tasks.Add(receiving);
-
-Console.CancelKeyPress += (s, e) =>
+Task ErrorHandler(ProcessErrorEventArgs args)
 {
-    cancel.Cancel();
-    e.Cancel = true;
-};
+    Console.WriteLine(args.Exception.ToString());
+    return Task.CompletedTask;
+}
 
 try
 {
-    await Task.WhenAll(tasks.ToArray());
+    processor.ProcessMessageAsync += MessageHandler;
+    processor.ProcessErrorAsync += ErrorHandler;
+    await processor.StartProcessingAsync();
+
+    Console.ReadKey();
+    cancel.Cancel();
+
+    await processor.StopProcessingAsync();
 }
 finally
 {
-    await receiver.DisposeAsync();
+    await processor.DisposeAsync();
     await sender.DisposeAsync();
     await client.DisposeAsync();
 }
