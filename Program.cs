@@ -3,6 +3,7 @@ using Grafana.OpenTelemetry;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
 using System.Globalization;
 
 var connectionString = Environment.GetEnvironmentVariable("DEMO_CONNECTION");
@@ -14,6 +15,12 @@ AppContext.SetSwitch("Azure.Experimental.EnableActivitySource", true);
 
 var enableSender = args.Length > 0 ? args.Contains("send") : true;
 var enableReceiver = args.Length > 0 ? args.Contains("receive") : true;
+var serviceName = (enableSender, enableReceiver) switch
+{
+    (true, false) => "ServiceBusSender",
+    (false, true) => "ServiceBusReceiver",
+    _ => "ServiceBusDemo"
+};
 
 Console.WriteLine($"Sending: {enableSender}, Receiving: {enableReceiver}");
 
@@ -22,6 +29,7 @@ using var tracing = Sdk.CreateTracerProviderBuilder()
     .AddSource("Azure.*")
     .UseGrafana()
     .AddConsoleExporter()
+    .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(serviceName))
     .Build();
 
 // force AMQP transport
